@@ -1,0 +1,10 @@
+# Python package requirements for ASI Camera Control
+
+# Scientific computing and array manipulation
+numpy>=1.20.0
+
+# FITS file format support for astronomical data
+astropy>=5.0.0
+
+# ZWO ASI camera SDK Python wrapper
+zwoasi>=0.1.0
