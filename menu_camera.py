@@ -24,7 +24,7 @@ from utils.capture_utils import capture_with_verification
 from utils.temp_logger import TemperatureLogger
 
 # Library path
-LIBRARY_PATH = 'PATH'   # Specify the path to the ZWO ASI SDK library here
+LIBRARY_PATH = '/path/to/your/libASICamera2.dll'  # Update this path
 CONFIG_FILE = 'config/camera_config.json'
 
 # Global state
