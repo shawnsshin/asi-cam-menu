@@ -9,9 +9,11 @@ A terminal-based menu-driven Python script for controlling ZWO ASI cameras. This
 - Temperature control and stabilization check
 - Single image capture with verification
 - Sequential capture mode (autorun) with temperature logging
+- **Live preview** with auto or manual real-time exposure adjustment (OpenCV)
 - FITS file output with metadata headers
 - Configurable camera settings (gain, exposure, offset, USB bandwidth)
 - JSON-based configuration management
+- Supports both cooled and non-cooled ASI cameras
 
 ## Menu Structure
 
@@ -28,6 +30,7 @@ ASI CAMERA CONTROL MENU
 5. Sequential Capture (Autorun)
 6. Change Output Directory
 7. Save Current Settings to Config
+8. Live Preview
 0. Exit
 ======================================================================
 ```
@@ -108,6 +111,15 @@ The script uses a JSON configuration file (`config/camera_config.json`) to store
 
 You can modify camera settings through the menu and save them using option 7.
 
+### Live Preview
+
+Select option 8 to open a live camera feed for checking object placement, focus, and framing. Choose between:
+
+- **Auto Exposure**: Camera adjusts exposure automatically. Use `+`/`-` to adjust target brightness.
+- **Manual Exposure**: Adjust exposure in real time with `+`/`-` keys (2x steps).
+
+Press `a` to toggle between modes, `q` or `ESC` to quit. Uses RAW8 for faster frame rates and restores original settings on exit.
+
 ### Capturing Images
 
 **Single Capture**: Select option 4 to capture a single image with current settings.
@@ -121,7 +133,7 @@ Images are saved as FITS files with timestamped folders in the output directory.
 ## Output
 
 - **FITS files**: Images are saved in FITS format with comprehensive headers including exposure time, gain, offset, temperature, and timing information
-- **Temperature logs**: During sequential capture, temperature is logged in CSV format in a `temp_log` subdirectory
+- **Temperature logs**: During sequential capture on cooled cameras, temperature is logged in CSV format in a `temp_log` subdirectory
 - **Organized folders**: Each capture session creates a timestamped folder (e.g., `20260109_143052`)
 
 ## Requirements
@@ -140,7 +152,8 @@ asi_sdk/
 ├── utils/                  # Utility modules
 │   ├── temperature_control.py
 │   ├── capture_utils.py
-│   └── temp_logger.py
+│   ├── temp_logger.py
+│   └── live_preview.py
 ├── config/                 # Configuration files (auto-created)
 │   └── camera_config.json
 └── captures/              # Output directory (auto-created)
