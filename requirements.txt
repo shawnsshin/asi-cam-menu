@@ -8,3 +8,6 @@ astropy>=5.0.0
 
 # ZWO ASI camera SDK Python wrapper
 zwoasi>=0.1.0
+
+# OpenCV for live preview
+opencv-python>=4.5.0
