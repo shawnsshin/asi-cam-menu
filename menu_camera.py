@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.temperature_control import stabilize_temperature, disable_cooler
 from utils.capture_utils import capture_with_verification
 from utils.temp_logger import TemperatureLogger
+from utils.live_preview import live_preview
 
 # Library path
 LIBRARY_PATH = '/path/to/your/libASICamera2.dll'  # Update this path
@@ -30,7 +31,16 @@ CONFIG_FILE = 'config/camera_config.json'
 # Global state
 camera = None
 cooler_enabled = False
+has_cooler = False
 config = None
+
+
+def get_temperature():
+    """Read sensor temperature. Returns None if sensor unavailable."""
+    try:
+        return camera.get_control_value(asi.ASI_TEMPERATURE)[0] / 10.0
+    except Exception:
+        return None
 
 
 def load_config(config_file=CONFIG_FILE):
@@ -104,7 +114,7 @@ def get_default_config():
 
 def initialize_camera():
     """Initialize camera and apply settings from config."""
-    global camera, config
+    global camera, config, has_cooler
 
     print("\n" + "=" * 70)
     print("INITIALIZING CAMERA")
@@ -124,6 +134,13 @@ def initialize_camera():
     camera_info = camera.get_camera_property()
     print(f"Camera: {camera_info['Name']}")
     print(f"Camera ID: {camera_info['CameraID']}")
+
+    # Detect cooler
+    has_cooler = bool(camera_info.get('IsCoolerCam'))
+    if has_cooler:
+        print("Cooler: Detected")
+    else:
+        print("Cooler: Not available (temperature control will be disabled)")
 
     # Apply settings from config
     print("\nApplying settings from configuration...")
@@ -161,6 +178,7 @@ def show_menu():
     print("5. Sequential Capture (Autorun)")
     print("6. Change Output Directory")
     print("7. Save Current Settings to Config")
+    print("8. Live Preview")
     print("0. Exit")
     print("=" * 70)
 
@@ -179,16 +197,22 @@ def option_view_status():
 
     # Temperature and cooler
     print("\n--- Temperature & Cooler ---")
-    temp = camera.get_control_value(asi.ASI_TEMPERATURE)[0] / 10.0
-    cooler_power = camera.get_control_value(asi.ASI_COOLER_POWER_PERC)[0]
-    cooler_on = camera.get_control_value(asi.ASI_COOLER_ON)[0]
+    temp = get_temperature()
+    if temp is not None:
+        print(f"Current Temperature: {temp:.1f}°C")
+    else:
+        print("Temperature sensor: Not available")
 
-    print(f"Current Temperature: {temp:.1f}°C")
-    print(f"Cooler Status: {'ON' if cooler_on else 'OFF'}")
-    if cooler_on:
-        target_temp = camera.get_control_value(asi.ASI_TARGET_TEMP)[0] / 10.0
-        print(f"Target Temperature: {target_temp:.1f}°C")
-        print(f"Cooler Power: {cooler_power}%")
+    if has_cooler:
+        cooler_power = camera.get_control_value(asi.ASI_COOLER_POWER_PERC)[0]
+        cooler_on = camera.get_control_value(asi.ASI_COOLER_ON)[0]
+        print(f"Cooler Status: {'ON' if cooler_on else 'OFF'}")
+        if cooler_on:
+            target_temp = camera.get_control_value(asi.ASI_TARGET_TEMP)[0] / 10.0
+            print(f"Target Temperature: {target_temp:.1f}°C")
+            print(f"Cooler Power: {cooler_power}%")
+    else:
+        print("Cooler: Not available")
 
     # Camera settings
     print("\n--- Camera Settings ---")
@@ -218,6 +242,10 @@ def option_temperature_control():
     print("\n" + "=" * 70)
     print("TEMPERATURE CONTROL")
     print("=" * 70)
+
+    if not has_cooler:
+        print("\nNo cooler detected on this camera. Temperature control unavailable.")
+        return
 
     # Check current status
     cooler_on = camera.get_control_value(asi.ASI_COOLER_ON)[0]
@@ -387,7 +415,7 @@ def option_single_capture():
         gain = camera.get_control_value(asi.ASI_GAIN)[0]
         offset = camera.get_control_value(asi.ASI_OFFSET)[0]
         bandwidth = camera.get_control_value(asi.ASI_BANDWIDTHOVERLOAD)[0]
-        temp = camera.get_control_value(asi.ASI_TEMPERATURE)[0] / 10.0
+        temp = get_temperature()
 
         # Create FITS file
         filename = output_dir / f"{config['capture']['filename_prefix']}_001.fits"
@@ -398,7 +426,8 @@ def option_single_capture():
         header['GAIN'] = (gain, 'The ratio of output / input')
         header['OFFSET'] = (offset, 'Brightness offset')
         header['USBBW'] = (bandwidth, 'USB bandwidth setting')
-        header['CMOSTEMP'] = (temp, 'CMOS sensor temperature in C')
+        if temp is not None:
+            header['CCD-TEMP'] = (temp, 'CMOS sensor temperature in C')
         header['DATE-OBS'] = (timing['capture_start_time'].isoformat(), 'UTC start of observation')
         header['EXPTIME'] = (timing['set_exposure_s'], 'Light collection time (s)')
         header['EXPMEAS'] = (round(timing['exposure_plus_readout_s'], 6), 'Measured time incl. readout (s)')
@@ -455,9 +484,11 @@ def option_sequential_capture():
     output_dir = Path(config['capture']['output_dir']) / datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create temp_log subdirectory
-    temp_log_dir = output_dir / "temp_log"
-    temp_log_dir.mkdir(exist_ok=True)
+    # Create temp_log subdirectory (only if cooler available)
+    temp_log_dir = None
+    if has_cooler:
+        temp_log_dir = output_dir / "temp_log"
+        temp_log_dir.mkdir(exist_ok=True)
 
     print(f"\nCapturing {num_images} images to {output_dir}")
     print(f"Inter-capture delay: {delay} s")
@@ -473,25 +504,29 @@ def option_sequential_capture():
         print(f"{'─' * 70}")
 
         try:
-            # Create temperature logger
-            log_file = temp_log_dir / f"temp_log_{i:04d}.csv"
-            temp_logger = TemperatureLogger(
-                camera,
-                log_file,
-                interval=config['autorun']['temp_log_interval']
-            )
+            # Create temperature logger (only for cooled cameras)
+            temp_logger = None
+            if has_cooler:
+                log_file = temp_log_dir / f"temp_log_{i:04d}.csv"
+                temp_logger = TemperatureLogger(
+                    camera,
+                    log_file,
+                    interval=config['autorun']['temp_log_interval']
+                )
 
             # Start exposure and temperature logging
             exposure_start = time.time()
             camera.start_exposure()
-            temp_logger.start(exposure_start)
+            if temp_logger:
+                temp_logger.start(exposure_start)
 
             # Poll for completion
             while camera.get_exposure_status() == asi.ASI_EXP_WORKING:
                 time.sleep(0.001)
 
             # Stop logger
-            temp_logger.stop()
+            if temp_logger:
+                temp_logger.stop()
 
             # Check status and get data
             exposure_end = time.time()
@@ -518,7 +553,7 @@ def option_sequential_capture():
             exposure_us = camera.get_control_value(asi.ASI_EXPOSURE)[0]
             offset = camera.get_control_value(asi.ASI_OFFSET)[0]
             bandwidth = camera.get_control_value(asi.ASI_BANDWIDTHOVERLOAD)[0]
-            temp = camera.get_control_value(asi.ASI_TEMPERATURE)[0] / 10.0
+            temp = get_temperature()
 
             # Create FITS file
             filename = output_dir / f"{config['capture']['filename_prefix']}_{i:04d}.fits"
@@ -529,7 +564,8 @@ def option_sequential_capture():
             header['GAIN'] = (gain, 'The ratio of output / input')
             header['OFFSET'] = (offset, 'Brightness offset')
             header['USBBW'] = (bandwidth, 'USB bandwidth setting')
-            header['CMOSTEMP'] = (temp, 'CMOS sensor temperature in C')
+            if temp is not None:
+                header['CCD-TEMP'] = (temp, 'CMOS sensor temperature in C')
             header['DATE-OBS'] = (datetime.fromtimestamp(exposure_start).isoformat(), 'UTC start of observation')
             header['EXPTIME'] = (exposure_us / 1_000_000, 'Light collection time (s)')
             header['COLORTYP'] = ('RAW16', 'Color space, such as RAW8,RAW16,RGB24')
@@ -541,9 +577,11 @@ def option_sequential_capture():
             hdu.writeto(filename, overwrite=True)
 
             print(f"✓ Image saved: {filename.name}")
-            print(f"  Temperature log: temp_log/{log_file.name}")
+            if temp_logger:
+                print(f"  Temperature log: temp_log/{log_file.name}")
             print(f"  Exposure + Readout time: {exposure_end - exposure_start:.3f} s")
-            print(f"  Temperature: {temp:.1f}°C")
+            if temp is not None:
+                print(f"  Temperature: {temp:.1f}°C")
 
             successful_captures += 1
 
@@ -632,6 +670,11 @@ def option_save_config():
         print("Save cancelled.")
 
 
+def option_live_preview():
+    """Option 8: Live preview for checking focus and object placement."""
+    live_preview(camera, get_temperature)
+
+
 def shutdown(_signum=None, _frame=None):
     """Graceful shutdown handler."""
     global camera, cooler_enabled
@@ -669,7 +712,7 @@ def main():
         sys.exit(1)
 
     # Optional: Enable cooler at startup if configured
-    if config['temperature']['use_cooler']:
+    if has_cooler and config['temperature']['use_cooler']:
         print("\n" + "=" * 70)
         print("TEMPERATURE CONTROL (Startup)")
         print("=" * 70)
@@ -713,6 +756,8 @@ def main():
                 option_change_output_directory()
             elif choice == "7":
                 option_save_config()
+            elif choice == "8":
+                option_live_preview()
             elif choice == "0":
                 shutdown()
             else:
